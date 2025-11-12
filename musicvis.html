@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pibr.fr - 3D Music Visualizer</title>
+  <style>
+    * { margin:0; padding:0; overflow:hidden; box-sizing:border-box; }
+    body { background:#000; font-family:'Courier New',monospace; }
+    canvas { display:block; }
+    #logo {
+      position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+      font-size:5vw; color:#0ff; text-shadow:0 0 20px #0ff,0 0 40px #0ff;
+      pointer-events:none; z-index:10; opacity:0; transition:opacity 1s;
+      font-weight:bold; letter-spacing:0.2em;
+    }
+    #info {
+      position:absolute; top:15px; left:15px; color:#0ff; z-index:100; font-size:14px;
+    }
+    #toggleBtn {
+      position:absolute; top:15px; right:15px; padding:10px 16px;
+      background:rgba(0,255,255,0.2); border:1px solid #0ff; color:#0ff;
+      font-family:inherit; font-size:14px; cursor:pointer; border-radius:8px;
+      box-shadow:0 0 10px #0ff; transition:all 0.3s; z-index:100;
+    }
+    #toggleBtn:hover { box-shadow:0 0 20px #0ff; background:rgba(0,255,255,0.4); }
+  </style>
+</head>
+<body>
+  <div id="logo">pibr.fr</div>
+  <div id="info">Click anywhere to start</div>
+  <button id="toggleBtn">Dark Mode</button>
+
+  <!-- THREE.JS + ORBITCONTROLS EMBEDDED (NO CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.167.1/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.167.1/examples/js/controls/OrbitControls.js"></script>
+
+  <script>
+    const logo = document.getElementById('logo');
+    const info = document.getElementById('info');
+    const toggleBtn = document.getElementById('toggleBtn');
+    let scene, camera, renderer, controls, analyser, dataArray;
+    let isDark = true;
+
+    // === TOGGLE DARK/LIGHT ===
+    toggleBtn.onclick = () => {
+      isDark = !isDark;
+      document.body.style.background = isDark ? '#000' : '#111';
+      toggleBtn.textContent = isDark ? 'Dark Mode' : 'Light Mode';
+      const color = isDark ? '#0ff' : '#0f0';
+      toggleBtn.style.color = color;
+      toggleBtn.style.borderColor = color;
+      toggleBtn.style.boxShadow = `0 0 10px ${color}`;
+    };
+
+    // === INIT 3D ===
+    function init3D() {
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.1, 100);
+      camera.position.z = 6;
+
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.setPixelRatio(devicePixelRatio);
+      document.body.appendChild(renderer.domElement);
+
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+
+      scene.add(new THREE.AmbientLight(0x404040));
+      const light = new THREE.PointLight(0x00ffff, 2);
+      light.position.set(0, 0, 5);
+      scene.add(light);
+
+      // Particles
+      const geom = new THREE.BufferGeometry();
+      const count = 3000;
+      const pos = new Float32Array(count * 3);
+      const col = new Float32Array(count * 3);
+      const sz = new Float32Array(count);
+      for (let i = 0; i < count; i++) {
+        const a = (i / count) * Math.PI * 2;
+        const r = Math.random() * 3 + 1;
+        pos[i*3]   = Math.cos(a) * r;
+        pos[i*3+1] = (Math.random() - 0.5) * 0.6;
+        pos[i*3+2] = Math.sin(a) * r;
+        col[i*3] = 0.3; col[i*3+1] = 0.7; col[i*3+2] = 1;
+        sz[i] = Math.random() * 2 + 1;
+      }
+      geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      geom.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      geom.setAttribute('size', new THREE.BufferAttribute(sz, 1));
+
+      const mat = new THREE.PointsMaterial({
+        size: 0.06, vertexColors: true,
+        blending: THREE.AdditiveBlending, transparent: true, depthWrite: false
+      });
+      const particles = new THREE.Points(geom, mat);
+      scene.add(particles);
+
+      // Sphere
+      const sphere = new THREE.Mesh(
+        new THREE.SphereGeometry(0.7, 32, 32),
+        new THREE.MeshPhongMaterial({ color: 0xff00ff, emissive: 0xff00aa, shininess: 100 })
+      );
+      scene.add(sphere);
+
+      // Waveform plane
+      const planeGeom = new THREE.PlaneGeometry(10, 10, 64, 64);
+      planeGeom.rotateX(-Math.PI / 2);
+      planeGeom.translate(0, -2.5, 0);
+      planeGeom.attributes.position.dynamic = true;
+
+      const plane = new THREE.Mesh(
+        planeGeom,
+        new THREE.MeshBasicMaterial({ color: 0x00ff00, wireframe: true, side: THREE.DoubleSide })
+      );
+      scene.add(plane);
+
+      logo.style.opacity = '1';
+      window.particles = particles;
+      window.sphere = sphere;
+      window.plane = plane;
+    }
+
+    // === START AUDIO (ONLY AFTER USER CLICK) ===
+    async function startAudio() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = ctx.createAnalyser();
+        analyser.fftSize = 2048;
+        const source = ctx.createMediaStreamSource(stream);
+        source.connect(analyser);
+        dataArray = new Uint8Array(analyser.frequencyBinCount);
+        info.textContent = "LIVE - Listening!";
+        info.style.color = "#0f0";
+        animate();
+      } catch (err) {
+        info.textContent = "Mic blocked - Click to retry";
+        info.style.color = "#f55";
+        console.error(err);
+      }
+    }
+
+    // === ANIMATION LOOP ===
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+
+      if (analyser && dataArray) {
+        analyser.getByteFrequencyData(dataArray);
+        const bass = dataArray.slice(0, 8).reduce((a,b)=>a+b)/8/255;
+        const mid  = dataArray.slice(20, 60).reduce((a,b)=>a+b)/40/255;
+
+        sphere.scale.setScalar(1 + bass * 2.5);
+        particles.rotation.y += 0.005 + mid * 0.03;
+
+        const verts = plane.geometry.attributes.position.array;
+        for (let i = 0; i < 65; i++) {
+          const freq = Math.floor((i / 64) * 256);
+          const amp = (dataArray[freq] || 0) / 255 * 3;
+          for (let j = 0; j < 65; j++) {
+            verts[(j * 65 + i) * 3 + 1] = amp;
+          }
+        }
+        plane.geometry.attributes.position.needsUpdate = true;
+
+        logo.style.textShadow = `0 0 ${20+bass*50}px #0ff, 0 0 ${40+bass*80}px #0ff`;
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    // === RESIZE ===
+    window.onresize = () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    };
+
+    // === START ON FIRST CLICK (REQUIRED BY BROWSER) ===
+    document.body.addEventListener('click', function init() {
+      document.body.removeEventListener('click', init);
+      info.textContent = "Starting audio...";
+      init3D();
+      startAudio();
+    });
+
+    info.textContent = "Click anywhere to start";
+  </script>
+</body>
+</html>
