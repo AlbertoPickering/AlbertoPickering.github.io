@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Music Visualiser by pibr.fr</title>
+
+  <!-- Inter Font -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    * { margin: 0; padding: 0; overflow: hidden; }
+    body { 
+      background: #000; color: #0f0; 
+      font-family: 'Inter', sans-serif; 
+      transition: background 0.5s;
+    }
+    canvas { display: block; }
+
+    /* Logo */
+    #logoContainer {
+      position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
+      text-align: center; z-index: 10;
+    }
+    #logoImg {
+      width: 333px; height: 155px; object-fit: contain; 
+      filter: drop-shadow(0 0 12px rgba(0, 255, 0, 0.6));
+      transition: filter 0.5s;
+    }
+    #logoText {
+      margin-top: 8px; font-size: 18px; font-weight: 700;
+      color: #0f0; text-decoration: none; 
+      text-shadow: 0 0 10px currentColor; transition: color 0.5s;
+    }
+    #logoText:hover { opacity: 0.9; }
+
+    /* Buttons */
+    button {
+      position: absolute; padding: 10px 16px;
+      background: rgba(0, 255, 0, 0.15); color: #0f0; border: 1.5px solid #0f0;
+      border-radius: 10px; font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: all 0.3s; z-index: 10;
+    }
+    button:hover { background: rgba(0, 255, 0, 0.3); transform: scale(1.05); }
+
+    #startButton { top: 20px; left: 20px; }
+    #modeToggle { top: 20px; right: 20px; }
+    #designToggle { top: 20px; right: 160px; }
+
+    /* Credit */
+    #credit {
+      position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%);
+      font-size: 11px; opacity: 0.75; pointer-events: none;
+      transition: color 0.5s; white-space: nowrap; font-weight: 500;
+    }
+
+    /* Light Mode */
+    body.light {
+      background: #f8f9fa; color: #111;
+    }
+    body.light #logoText, body.light button, body.light #credit {
+      color: #111; text-shadow: none;
+    }
+    body.light #logoImg {
+      filter: drop-shadow(0 0 12px rgba(0, 0, 0, 0.3));
+    }
+    body.light button {
+      background: rgba(0, 0, 0, 0.1); border: 1.5px solid #111;
+    }
+    body.light button:hover {
+      background: rgba(0, 0, 0, 0.2);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <div id="logoContainer">
+    <a href="https://pibr.fr" target="_blank">
+      <img src="musicvisualiser-logo-dark.svg" alt="Logo" id="logoImg">
+    </a>
+    <a href="https://pibr.fr" target="_blank" id="logoText">Music Visualiser by pibr.fr</a>
+  </div>
+
+  <button id="startButton">Start Visualizer</button>
+  <button id="modeToggle">Light Mode</button>
+  <button id="designToggle">Design: Orb</button>
+
+  <div id="credit">Visualiser Designed by Alberto Pickering Brunel powered by Grok</div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const startButton = document.getElementById('startButton');
+    const modeToggle = document.getElementById('modeToggle');
+    const designToggle = document.getElementById('designToggle');
+    const logoImg = document.getElementById('logoImg');
+    let audioCtx, analyser, source, dataArray, bufferLength, timeData;
+    let isDark = true;
+    let designMode = 0;
+    let lastBeat = 0;
+    let angle = 0;
+
+    const designs = ['Orb', 'Circle', 'Vortex', 'Grid'];
+
+    designToggle.addEventListener('click', () => {
+      designMode = (designMode + 1) % 4;
+      designToggle.textContent = `Design: ${designs[designMode]}`;
+    });
+
+    modeToggle.addEventListener('click', () => {
+      isDark = !isDark;
+      document.body.classList.toggle('light', !isDark);
+      modeToggle.textContent = isDark ? 'Light Mode' : 'Dark Mode';
+      logoImg.src = isDark ? 'musicvisualiser-logo-dark.svg' : 'musicvisualiser-logo-light.svg';
+    });
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Tiny Particle
+    const particles = [];
+    class Particle {
+      constructor(x, y, hue) {
+        this.x = x; this.y = y;
+        this.vx = (Math.random() - 0.5) * 6;
+        this.vy = (Math.random() - 0.5) * 6;
+        this.life = 1;
+        this.decay = 0.025;
+        this.size = 1 + Math.random();
+        this.hue = hue;
+      }
+      update() {
+        this.x += this.vx; this.y += this.vy;
+        this.vx *= 0.96; this.vy *= 0.96;
+        this.life -= this.decay;
+        this.size *= 0.95;
+      }
+      draw() {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${this.hue}, 100%, 70%, ${this.life})`;
+        ctx.shadowBlur = 6;
+        ctx.shadowColor = `hsla(${this.hue}, 100%, 70%, ${this.life * 0.8})`;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+    }
+
+    async function startAudio() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioCtx.createAnalyser();
+        source = audioCtx.createMediaStreamSource(stream);
+        source.connect(analyser);
+        analyser.fftSize = 4096;
+        bufferLength = analyser.frequencyBinCount;
+        dataArray = new Uint8Array(bufferLength);
+        timeData = new Uint8Array(analyser.fftSize); // For oscilloscope
+        startButton.style.display = 'none';
+        draw();
+      } catch (e) {
+        startButton.textContent = "Retry";
+      }
+    }
+    startButton.addEventListener('click', startAudio);
+
+    function draw() {
+      requestAnimationFrame(draw);
+      if (!analyser) return;
+
+      analyser.getByteFrequencyData(dataArray);
+      analyser.getByteTimeDomainData(timeData); // <-- OSCILLOSCOPE DATA
+
+      ctx.fillStyle = isDark ? 'rgba(0,0,0,0.07)' : 'rgba(255,255,255,0.07)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const bass = dataArray.slice(0, 15).reduce((a,b)=>a+b)/15/255;
+      const mid = dataArray.slice(40, 100).reduce((a,b)=>a+b)/60/255;
+      const high = dataArray.slice(150, 400).reduce((a,b)=>a+b)/250/255;
+      const centerX = canvas.width / 2;
+      const centerY = canvas.height / 2;
+
+      // === FULL-SCREEN OSCILLOSCOPE WAVE (ALWAYS VISIBLE) ===
+      ctx.lineWidth = 2 + mid * 4;
+      ctx.strokeStyle = `hsla(${120 + high * 120}, 100%, 70%, 0.9)`;
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = `hsla(${120 + high * 120}, 100%, 70%, 0.8)`;
+      ctx.beginPath();
+      const sliceWidth = canvas.width / timeData.length;
+      for (let i = 0; i < timeData.length; i++) {
+        const v = (timeData[i] - 128) / 128;
+        const y = centerY + v * canvas.height * 0.35;
+        const x = i * sliceWidth;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // EQ Bars
+      const barCount = 100;
+      const barWidth = canvas.width / barCount;
+      for (let i = 0; i < barCount; i++) {
+        const h = (dataArray[Math.floor(i * bufferLength / barCount)] / 255) * canvas.height * 0.55;
+        const hue = (i * 3.6 + bass * 100) % 360;
+        const l = isDark ? 30 + high * 60 : 15 + high * 40;
+        const grad = ctx.createLinearGradient(0, canvas.height - h, 0, canvas.height);
+        grad.addColorStop(0, `hsla(${hue},100%,${l+30}%,0.9)`);
+        grad.addColorStop(1, `hsla(${hue},100%,${l}%,0.4)`);
+        ctx.fillStyle = grad;
+        ctx.fillRect(i * barWidth + 1, canvas.height - h, barWidth - 2, h);
+      }
+
+      // DESIGN MODES
+      if (designMode === 0) { // ORB
+        const r = 80 + bass * 320;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, r + 30, 0, Math.PI*2);
+        ctx.strokeStyle = `hsla(${200 + high*140},100%,70%,${bass})`;
+        ctx.lineWidth = 6 + mid*12;
+        ctx.stroke();
+
+        const grad = ctx.createRadialGradient(centerX, centerY, r*0.3, centerX, centerY, r);
+        grad.addColorStop(0, `hsla(${200 + high*140},100%,85%,0.9)`);
+        grad.addColorStop(1, `hsla(${240 + high*80},100%,40%,0)`);
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        if (bass > 0.8 && performance.now() - lastBeat > 100) {
+          lastBeat = performance.now();
+          for (let i = 0; i < 10; i++) {
+            const a = (i/10)*Math.PI*2;
+            particles.push(new Particle(centerX + Math.cos(a)*r*0.6, centerY + Math.sin(a)*r*0.6, (200 + i*36)%360));
+          }
+        }
+
+      } else if (designMode === 1) { // CIRCLE
+        const baseR = Math.min(canvas.width, canvas.height) * 0.35;
+        for (let layer = 0; layer < 3; layer++) {
+          ctx.beginPath();
+          for (let i = 0; i < bufferLength; i += 5) {
+            const a = (i/bufferLength)*Math.PI*2;
+            const amp = dataArray[i]/255 * (baseR * 0.8) * (1 - layer*0.25);
+            const r = baseR + amp + layer*50;
+            const x = centerX + Math.cos(a)*r;
+            const y = centerY + Math.sin(a)*r;
+            i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+          }
+          ctx.closePath();
+          ctx.strokeStyle = `hsla(${180 + mid*130},100%,70%,${0.9 - layer*0.3})`;
+          ctx.lineWidth = 2 + mid*5;
+          ctx.stroke();
+        }
+
+      } else if (designMode === 2) { // VORTEX
+        angle += bass * 0.1;
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        ctx.rotate(angle);
+        for (let i = 0; i < 80; i++) {
+          const a = (i/80)*Math.PI*2;
+          const dist = 50 + i * 8 + bass * 300;
+          const x = Math.cos(a) * dist;
+          const y = Math.sin(a) * dist;
+          const hue = (i*4.5 + high*200) % 360;
+          ctx.beginPath();
+          ctx.arc(x, y, 2 + high*6, 0, Math.PI*2);
+          ctx.fillStyle = `hsla(${hue},100%,70%,${0.8 - i*0.01})`;
+          ctx.fill();
+        }
+        ctx.restore();
+
+      } else if (designMode === 3) { // GRID
+        const gridSize = 40;
+        const cellW = canvas.width / gridSize;
+        const cellH = canvas.height / gridSize;
+        for (let x = 0; x < gridSize; x++) {
+          for (let y = 0; y < gridSize; y++) {
+            const idx = Math.floor((x + y * gridSize) * bufferLength / (gridSize * gridSize));
+            const val = dataArray[idx] / 255;
+            const size = val * 8;
+            const hue = (x * 9 + y * 7 + bass * 100) % 360;
+            ctx.fillStyle = `hsla(${hue},100%,60%,${val*0.8})`;
+            ctx.fillRect(x * cellW - size/2, y * cellH - size/2, size, size);
+          }
+        }
+      }
+
+      // Particles
+      particles.forEach((p, i) => {
+        p.update();
+        p.draw();
+        if (p.life <= 0) particles.splice(i, 1);
+      });
+    }
+  </script>
+</body>
+</html>
